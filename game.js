@@ -159,8 +159,7 @@ function loadScores() {
   db.collection("scores")
     .orderBy("score", "desc")
     .limit(10)
-    .get()
-    .then(snapshot => {
+    .onSnapshot(snapshot => {
       leaderboard = [];
       snapshot.forEach(doc => {
         leaderboard.push(doc.data());
