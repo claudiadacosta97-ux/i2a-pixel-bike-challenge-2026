@@ -5,7 +5,17 @@ const WIDTH = canvas.width;
 const HEIGHT = canvas.height;
 const ROUTE_Y = 220;
 const DEBUG_HITBOXES = false;
-const STORAGE_KEY = "isere-bike-2026-scores";
+const firebaseConfig = {
+  apiKey: "AIzaSyDoruwEIUBvisJo8JUvjyrdQm3IDUpNljg",
+  authDomain: "isere-bike-game-e6b44.firebaseapp.com",
+  projectId: "isere-bike-game-e6b44",
+  storageBucket: "isere-bike-game-e6b44.firebasestorage.app",
+  messagingSenderId: "500213259930",
+  appId: "1:500213259930:web:500ece55b897f2825a8923"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
 
 ctx.imageSmoothingEnabled = false;
 
@@ -143,19 +153,19 @@ let nextSpawnDistance = 340;
 let distanceSinceSpawn = 0;
 let routeOffset = 0;
 
-let leaderboard = loadScores();
+let leaderboard = [];
 
 function loadScores() {
-  try {
-    const scores = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-    return Array.isArray(scores) ? scores : [];
-  } catch (error) {
-    return [];
-  }
-}
-
-function saveScores() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(leaderboard.slice(0, 10)));
+  db.collection("scores")
+    .orderBy("score", "desc")
+    .limit(10)
+    .get()
+    .then(snapshot => {
+      leaderboard = [];
+      snapshot.forEach(doc => {
+        leaderboard.push(doc.data());
+      });
+    });
 }
 
 function clamp(value, min, max) {
@@ -310,13 +320,15 @@ function jump() {
 
 function endGame() {
   if (!savedThisRun) {
-    leaderboard.push({
+
+    db.collection("scores").add({
       name: playerName.trim() || "ANONYME",
-      score: Math.floor(score)
+      score: Math.floor(score),
+      date: Date.now()
+    }).then(() => {
+      loadScores();
     });
-    leaderboard.sort((a, b) => b.score - a.score);
-    leaderboard = leaderboard.slice(0, 10);
-    saveScores();
+
     savedThisRun = true;
   }
 
@@ -525,6 +537,7 @@ function drawGameOver() {
 }
 
 function drawRanking() {
+  loadScores();
   drawCanvaBackground();
   ctx.drawImage(images.logo, 42, 54, 180, 180);
 
@@ -582,6 +595,7 @@ function loop(timestamp) {
   }
 
   render();
+  loadScores();
   requestAnimationFrame(loop);
 }
 
