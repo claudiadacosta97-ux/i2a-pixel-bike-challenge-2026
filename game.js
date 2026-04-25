@@ -6,6 +6,8 @@ const HEIGHT = canvas.height;
 const ROUTE_Y = 220;
 const DEBUG_HITBOXES = false;
 const STORAGE_KEY = "isere-bike-2026-scores";
+const SUPABASE_URL = "https://egeqeghmseeufyupidgl.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVnZXFlZ2htc2VldWZ5dXBpZGdsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxMDc1NDYsImV4cCI6MjA5MjY4MzU0Nn0.YGR21zsF8CQ2PeRUWjQjtMbGGosDgxqbWT-EAZd0vmw";
 
 ctx.imageSmoothingEnabled = false;
 
@@ -38,7 +40,7 @@ const images = {
     loadImage("Vercors.png"),
     loadImage("Belledonne.png"),
     loadImage("Chartreuse.png"),
-    loadImage("Ecrins.png", "\u00c9crins.png")
+    loadImage("Ecrins.png")
   ],
   obstacles: {
     pierre: loadImage("Pierre.png"),
@@ -69,7 +71,9 @@ const ui = {
   rankingButton: { x: 320, y: 258, width: 260, height: 24 },
   changeCharacterButton: { x: 320, y: 256, width: 250, height: 26 },
   replayButton: { x: 590, y: 256, width: 180, height: 26 },
-  howToButton: { x: 390, y: 236, width: 120, height: 40 }
+  howToButton: { x: 390, y: 236, width: 120, height: 40 },
+  touchCrouchButton: { x: 18, y: 154, width: 110, height: 42 },
+  touchJumpButton: { x: 772, y: 154, width: 110, height: 42 }
 };
 
 const obstacleTypes = {
@@ -116,6 +120,8 @@ let selectionFlow = "intro";
 let rankingChoice = 1;
 let lastTime = 0;
 let savedThisRun = false;
+let touchControlsActive = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+let activeTouchControl = null;
 
 const keys = {
   down: false,
@@ -143,15 +149,60 @@ let nextSpawnDistance = 340;
 let distanceSinceSpawn = 0;
 let routeOffset = 0;
 
+let supabaseClient = null;
 let leaderboard = loadScores();
 
-function loadScores() {
+function getSupabaseClient() {
+  if (supabaseClient) return supabaseClient;
+  if (!window.supabase || !window.supabase.createClient) return null;
+
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return supabaseClient;
+}
+
+function normalizeScores(scores) {
+  return (Array.isArray(scores) ? scores : [])
+    .map((entry) => ({
+      name: String(entry.name || "ANONYME").slice(0, 10),
+      score: Number(entry.score) || 0
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10);
+}
+
+function loadLocalScores() {
   try {
     const scores = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-    return Array.isArray(scores) ? scores : [];
+    return normalizeScores(scores);
   } catch (error) {
     return [];
   }
+}
+
+async function refreshScoresFromSupabase() {
+  const client = getSupabaseClient();
+  if (!client) return;
+
+  try {
+    const { data, error } = await client
+      .from("scores")
+      .select("name, score")
+      .order("score", { ascending: false })
+      .limit(10);
+
+    if (error) throw error;
+
+    leaderboard = normalizeScores(data);
+    saveScores();
+  } catch (error) {
+    console.warn("Classement Supabase indisponible, fallback local.", error);
+  }
+}
+
+function loadScores() {
+  const fallbackScores = loadLocalScores();
+  refreshScoresFromSupabase();
+  return fallbackScores;
 }
 
 function saveScores() {
@@ -185,6 +236,14 @@ function pointInRect(x, y, rect) {
     y >= rect.y &&
     y <= rect.y + rect.height
   );
+}
+
+function canvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (event.clientX - rect.left) * (canvas.width / rect.width),
+    y: (event.clientY - rect.top) * (canvas.height / rect.height)
+  };
 }
 
 function setFont(size) {
@@ -308,16 +367,43 @@ function jump() {
   player.holdJumpFrames = 0;
 }
 
-function endGame() {
+function addScoreFallback(entry) {
+  leaderboard.push(entry);
+  leaderboard = normalizeScores(leaderboard);
+  saveScores();
+}
+
+async function endGame() {
   if (!savedThisRun) {
-    leaderboard.push({
+    const entry = {
       name: playerName.trim() || "ANONYME",
       score: Math.floor(score)
-    });
-    leaderboard.sort((a, b) => b.score - a.score);
-    leaderboard = leaderboard.slice(0, 10);
-    saveScores();
+    };
+
+    const client = getSupabaseClient();
+
     savedThisRun = true;
+
+    if (!client) {
+      addScoreFallback(entry);
+      state = "gameover";
+      return;
+    }
+
+    try {
+      const { error } = await client
+        .from("scores")
+        .insert(entry);
+
+      if (error) throw error;
+
+      // 🔥 ATTEND VRAIMENT le refresh
+      await refreshScoresFromSupabase();
+
+    } catch (error) {
+      console.warn("Fallback local", error);
+      addScoreFallback(entry);
+    }
   }
 
   state = "gameover";
@@ -411,6 +497,26 @@ function drawGame() {
 
   ctx.textAlign = "right";
   ctx.fillText(playerName || "JOUEUR", WIDTH - 18, 26);
+
+  const bestScore = leaderboard[0];
+  const currentScore = Math.floor(score);
+  const displayedBest = bestScore && bestScore.score >= currentScore
+    ? bestScore
+    : { name: playerName || "JOUEUR", score: currentScore };
+
+  if (displayedBest) {
+    const bestName = String(displayedBest.name || "ANONYME").slice(0, 10).toUpperCase();
+    setFont(8);
+    ctx.fillStyle = "black";
+    ctx.textAlign = "right";
+    ctx.fillText(
+      "Meilleur score : " + bestName + " - " + displayedBest.score,
+      WIDTH - 12,
+      HEIGHT - 12
+    );
+  }
+
+  drawTouchControls();
 }
 
 function drawHome() {
@@ -451,6 +557,13 @@ function drawActionButton(rect, label, selected) {
   ctx.fill();
   drawText(label, rect.x + rect.width / 2, rect.y + rect.height / 2 + 1, 8, selected ? "white" : "#f39557");
   ctx.restore();
+}
+
+function drawTouchControls() {
+  if (!touchControlsActive) return;
+
+  drawActionButton(ui.touchCrouchButton, "BAS", activeTouchControl === "crouch");
+  drawActionButton(ui.touchJumpButton, "SAUT", activeTouchControl === "jump");
 }
 
 function drawSelectionControls() {
@@ -519,7 +632,7 @@ function drawGameOver() {
   drawHomeBackground();
 
   drawShadowText("GAME OVER", WIDTH / 2, 214, 18, "#f39557");
-  drawShadowText("Score : " + Math.floor(score), WIDTH / 2, 240, 10, "white");
+  drawText("Score : " + Math.floor(score), WIDTH / 2, 240, 10, "black");
   drawActionButton(ui.rankingButton, "Voir le classement", true);
   drawShadowText("Espace", WIDTH / 2, 294, 10, "white");
 }
@@ -709,10 +822,48 @@ window.addEventListener("keyup", (event) => {
   if (event.code === "ArrowDown") keys.down = false;
 });
 
+canvas.addEventListener("pointerdown", (event) => {
+  if (event.pointerType === "mouse" || state !== "game") return;
+
+  event.preventDefault();
+  touchControlsActive = true;
+  const point = canvasPoint(event);
+
+  if (pointInRect(point.x, point.y, ui.touchCrouchButton) || point.x < WIDTH * 0.35) {
+    keys.down = true;
+    player.crouchFrames = 42;
+    activeTouchControl = "crouch";
+    return;
+  }
+
+  if (!keys.space) {
+    jump();
+  }
+
+  keys.space = true;
+  activeTouchControl = "jump";
+});
+
+function stopTouchControl() {
+  if (activeTouchControl === "jump") {
+    keys.space = false;
+  }
+
+  if (activeTouchControl === "crouch") {
+    keys.down = false;
+  }
+
+  activeTouchControl = null;
+}
+
+canvas.addEventListener("pointerup", stopTouchControl);
+canvas.addEventListener("pointercancel", stopTouchControl);
+canvas.addEventListener("pointerleave", stopTouchControl);
+
 canvas.addEventListener("click", (event) => {
-  const rect = canvas.getBoundingClientRect();
-  const x = (event.clientX - rect.left) * (canvas.width / rect.width);
-  const y = (event.clientY - rect.top) * (canvas.height / rect.height);
+  const point = canvasPoint(event);
+  const x = point.x;
+  const y = point.y;
 
   if (state === "home" && pointInRect(x, y, ui.homeButton)) {
     selectionFlow = "intro";
