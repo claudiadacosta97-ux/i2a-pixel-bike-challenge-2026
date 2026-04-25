@@ -1,12 +1,6 @@
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
-// 🔥 SUPABASE
-const SUPABASE_URL = "https://egeqeghmseeufyupidgl.supabase.co";
-const SUPABASE_KEY = "TA_CLE_ANON_ICI";
-
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
 const WIDTH = canvas.width;
 const HEIGHT = canvas.height;
 const ROUTE_Y = 220;
@@ -149,29 +143,14 @@ let nextSpawnDistance = 340;
 let distanceSinceSpawn = 0;
 let routeOffset = 0;
 
-let leaderboard = [];
-loadScores();
+let leaderboard = loadScores();
 
-async function loadScores() {
+function loadScores() {
   try {
-    const { data } = await supabase
-      .from("scores")
-      .select("*")
-      .order("score", { ascending: false })
-      .limit(10);
-
-    if (data && data.length > 0) {
-      leaderboard = data;
-    } else {
-      // fallback local si vide
-      const local = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-      leaderboard = local;
-    }
-
-  } catch (e) {
-    // fallback si erreur
-    const local = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-    leaderboard = local;
+    const scores = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+    return Array.isArray(scores) ? scores : [];
+  } catch (error) {
+    return [];
   }
 }
 
@@ -331,21 +310,13 @@ function jump() {
 
 function endGame() {
   if (!savedThisRun) {
-
-    const newScore = {
+    leaderboard.push({
       name: playerName.trim() || "ANONYME",
       score: Math.floor(score)
-    };
-
-    // 🔥 ENVOI SUPABASE
-    supabase.from("scores").insert([newScore]);
-
-    // 💾 backup local
-    leaderboard.push(newScore);
+    });
     leaderboard.sort((a, b) => b.score - a.score);
     leaderboard = leaderboard.slice(0, 10);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(leaderboard));
-
+    saveScores();
     savedThisRun = true;
   }
 
