@@ -1,3 +1,7 @@
+const SUPABASE_URL = "https://egeqeghmseeufyupidgl.supabase.co";
+const SUPABASE_KEY = "sb_secret_67CwWHmKO2Rwc4RH1u4R7g_Nk8xnDKO";
+
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
@@ -155,16 +159,16 @@ let routeOffset = 0;
 
 let leaderboard = [];
 
-function loadScores() {
-  db.collection("scores")
-    .orderBy("score", "desc")
-    .limit(10)
-    .onSnapshot(snapshot => {
-      leaderboard = [];
-      snapshot.forEach(doc => {
-        leaderboard.push(doc.data());
-      });
-    });
+async function loadScores() {
+  const { data, error } = await supabase
+    .from("scores")
+    .select("*")
+    .order("score", { ascending: false })
+    .limit(10);
+
+  if (!error && data) {
+    leaderboard = data;
+  }
 }
 
 function clamp(value, min, max) {
@@ -320,16 +324,23 @@ function jump() {
 function endGame() {
   if (!savedThisRun) {
 
-    db.collection("scores").add({
-      name: playerName.trim() || "ANONYME",
-      score: Math.floor(score),
-      date: Date.now()
-    }).then(() => {
-      loadScores();
-    });
+    supabase
+      .from("scores")
+      .insert([
+        {
+          name: playerName.trim() || "ANONYME",
+          score: Math.floor(score)
+        }
+      ])
+      .then(() => {
+        loadScores();
+      });
 
     savedThisRun = true;
   }
+
+  state = "gameover";
+}
 
   state = "gameover";
 }
